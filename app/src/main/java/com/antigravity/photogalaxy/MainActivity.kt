@@ -81,14 +81,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+        val container = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0D0D17"))
+            addView(
+                webView,
+                android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(container) { v, insets ->
             val sys = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             v.setPadding(sys.left, sys.top, sys.right, sys.bottom)
             WindowInsetsCompat.CONSUMED
         }
-        setContentView(webView)
+        setContentView(container)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {

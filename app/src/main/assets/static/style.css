@@ -7,14 +7,13 @@ html, body {
 #c.dragging { cursor: grabbing; }
 #c.pointer { cursor: pointer; }
 
-/* Subtle top status text (non-interactive, below camera hole area) */
+/* Bottom status line inside the bottom control dock (away from top status bar & camera hole) */
 #topStatus {
-  position: fixed; top: env(safe-area-inset-top, 8px); left: 14px; right: 14px;
-  display: flex; align-items: center; gap: 10px; padding: 6px 4px;
-  pointer-events: none; z-index: 4; text-shadow: 0 1px 4px #000d;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 2px 8px; max-width: 96vw; pointer-events: none; text-shadow: 0 1px 4px #000d;
 }
-.brand { font-weight: 700; font-size: 14px; color: #c8c8e8; opacity: 0.9; white-space: nowrap; }
-#stats { color: #9a9ab8; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand { font-weight: 700; font-size: 13px; color: #c8c8e8; opacity: 0.92; white-space: nowrap; }
+#stats { color: #a0a0be; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Bottom control dock — away from top camera punch hole & within easy thumb reach */
 #bar {

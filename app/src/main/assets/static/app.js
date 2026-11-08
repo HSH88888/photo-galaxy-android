@@ -10,6 +10,26 @@ const $ = (q) => document.querySelector(q);
 const canvas = $('#c');
 const ctx = canvas.getContext('2d');
 
+// iOS WKWebView custom URL scheme (photogalaxy://) fetch compatibility bridge
+if (window.location.protocol === 'photogalaxy:') {
+  window.fetch = (url, opts = {}) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(opts.method || 'GET', url, true);
+    xhr.responseType = 'text';
+    xhr.onload = () => {
+      const ok = xhr.status >= 200 && xhr.status < 300;
+      resolve({
+        ok,
+        status: xhr.status,
+        json: async () => JSON.parse(xhr.responseText),
+        text: async () => xhr.responseText
+      });
+    };
+    xhr.onerror = () => reject(new Error('XHR error'));
+    xhr.send(opts.body || null);
+  });
+}
+
 const COLORS = ['#6c5ce7', '#e74c3c', '#f39c12', '#27ae60', '#3498db', '#e84393', '#00b894', '#fdcb6e', '#a29bfe', '#fd79a8'];
 const P = 1;                       // photo radius
 const AREA = 2.35 * 2.35;          // world area reserved per photo
@@ -238,18 +258,29 @@ function getImg(id, lvl, pri, wanted) {
 async function fetchImg(id, lvl) {
   const v = T.version || 0;
   const url = lvl === 0 ? `/api/thumb?id=${id}&v=${v}` : `/api/img?id=${id}&s=${LEVEL_SIZE[lvl]}&v=${v}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(r.status);
-  const bmp = await createImageBitmap(await r.blob());
-  const side = Math.min(bmp.width, bmp.height);
+  let bmp;
+  if (window.location.protocol === 'photogalaxy:') {
+    bmp = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = rej;
+      im.src = url;
+    });
+  } else {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    bmp = await createImageBitmap(await r.blob());
+  }
+  const w = bmp.naturalWidth || bmp.width, h = bmp.naturalHeight || bmp.height;
+  const side = Math.min(w, h);
   const sz = Math.max(1, Math.min(side, LEVEL_SIZE[lvl]));
   const c = document.createElement('canvas');
   c.width = c.height = sz;
   const g = c.getContext('2d');
   g.imageSmoothingQuality = 'high';
   g.beginPath(); g.arc(sz / 2, sz / 2, sz / 2, 0, Math.PI * 2); g.clip();
-  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, sz, sz);
-  bmp.close();
+  g.drawImage(bmp, (w - side) / 2, (h - side) / 2, side, side, 0, 0, sz, sz);
+  if (bmp.close) bmp.close();
   return c;
 }
 
@@ -456,13 +487,13 @@ function render() {
 let anim = null;
 
 function usableCenterY() {
-  const topPad = 28;
+  const topPad = 8;
   const botPad = getBarHeight();
   return topPad + Math.max(100, H - topPad - botPad) / 2;
 }
 
 function usableMinDim() {
-  const topPad = 28;
+  const topPad = 8;
   const botPad = getBarHeight();
   return Math.min(W, Math.max(200, H - topPad - botPad));
 }
