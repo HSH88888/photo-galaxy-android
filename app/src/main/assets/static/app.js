@@ -22,11 +22,33 @@ let thumbMaxVisible = Math.max(10, Math.min(1000, +(localStorage.getItem('thumbM
 let W = 0, H = 0, DPR = 1;
 let T = null;            // tree json
 let N = 0, NP = 0;       // folder / photo counts
-let parent, start, count, total, depth, rep, children;
+let parent, start, count, total, depth, rep, defaultRep, children, subEnd;
 let fx, fy, dir, repR, r0, coreR, subR, dist, span, encX, encY;
 let px, py, pf;
 const cam = { s: 1, tx: 0, ty: 0 };
 let minScale = 0.001;
+
+/* Customizations (representative photo & custom display name per folder) */
+let customReps = {};
+let customNames = {};
+try { customReps = JSON.parse(localStorage.getItem('pg_custom_reps') || '{}'); } catch (_) {}
+try { customNames = JSON.parse(localStorage.getItem('pg_custom_names') || '{}'); } catch (_) {}
+
+function saveCustomizations() {
+  try {
+    localStorage.setItem('pg_custom_reps', JSON.stringify(customReps));
+    localStorage.setItem('pg_custom_names', JSON.stringify(customNames));
+  } catch (_) {}
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+}
 
 /* ------------------------------------------------------------------ data */
 
@@ -47,35 +69,76 @@ async function loadTree() {
   fitAll(false);
 }
 
+function rawFolderPath(i) {
+  const parts = [];
+  for (; i > 0; i = parent[i]) parts.push(T.folders[i][1]);
+  return parts.reverse().join('/');
+}
+
+function folderKey(i) {
+  return `${T.mode || 'folder'}:${rawFolderPath(i)}`;
+}
+
+function folderDisplayName(i) {
+  return customNames[folderKey(i)] || T.folders[i][1];
+}
+
+function folderPath(i) {
+  const parts = [];
+  for (; i > 0; i = parent[i]) parts.push(folderDisplayName(i));
+  return parts.reverse().join(' › ') || T.rootName;
+}
+
+function applyCustomReps() {
+  for (let i = 0; i < N; i++) rep[i] = defaultRep[i];
+  for (let i = 0; i < N; i++) {
+    const wantedName = customReps[folderKey(i)];
+    if (!wantedName) continue;
+    // Search within this folder and its subtree
+    const pStart = start[i];
+    const lastFolder = subEnd[i];
+    const pEnd = start[lastFolder] + count[lastFolder];
+    for (let id = pStart; id < pEnd; id++) {
+      if (T.photos[id] === wantedName) {
+        rep[i] = id;
+        break;
+      }
+    }
+  }
+}
+
 function layout() {
   const fl = T.folders;
   N = fl.length; NP = T.photos.length;
   parent = new Int32Array(N); start = new Int32Array(N); count = new Int32Array(N);
-  total = new Int32Array(N); depth = new Int32Array(N); rep = new Int32Array(N).fill(-1);
+  total = new Int32Array(N); depth = new Int32Array(N);
+  rep = new Int32Array(N).fill(-1); defaultRep = new Int32Array(N).fill(-1);
+  subEnd = new Int32Array(N);
   children = Array.from({ length: N }, () => []);
   for (let i = 0; i < N; i++) {
     const [p, , st, c, t] = fl[i];
-    parent[i] = p; start[i] = st; count[i] = c; total[i] = t;
+    parent[i] = p; start[i] = st; count[i] = c; total[i] = t; subEnd[i] = i;
     if (p >= 0) { children[p].push(i); depth[i] = depth[p] + 1; }
   }
-  // representative photo: first photo of the folder, else of the first child that has one
+  // Compute DFS subtree end folder index & default representative photo
   for (let i = N - 1; i >= 0; i--) {
-    if (count[i] > 0) rep[i] = start[i];
-    else for (const c of children[i]) if (rep[c] >= 0) { rep[i] = rep[c]; break; }
+    if (children[i].length) subEnd[i] = subEnd[children[i][children[i].length - 1]];
+    if (count[i] > 0) defaultRep[i] = start[i];
+    else for (const c of children[i]) if (defaultRep[c] >= 0) { defaultRep[i] = defaultRep[c]; break; }
   }
+  applyCustomReps();
 
   fx = new Float64Array(N); fy = new Float64Array(N); dir = new Float64Array(N);
   repR = new Float64Array(N); r0 = new Float64Array(N); coreR = new Float64Array(N);
   subR = new Float64Array(N); dist = new Float64Array(N); span = new Float64Array(N);
   encX = new Float64Array(N); encY = new Float64Array(N);
-  // local frame of each folder: folder at origin, children fan out around +x
   const lx = new Float64Array(N), ly = new Float64Array(N), lang = new Float64Array(N);
-  const ox = new Float64Array(N), oy = new Float64Array(N);   // enclosing-circle center (local)
+  const ox = new Float64Array(N), oy = new Float64Array(N);
   const ROOT_SPAN = Math.PI * 2 * 0.985, SUB_SPAN = Math.PI * 1.25;
 
   // bottom-up: each subtree is laid out in its own frame and wrapped by an enclosing circle
   for (let i = N - 1; i >= 0; i--) {
-    repR[i] = 3 + 2.4 * Math.pow(total[i], 0.45);          // folder photo grows with photo count
+    repR[i] = 3 + 2.4 * Math.pow(total[i], 0.45);
     r0[i] = repR[i] + 1.6;
     coreR[i] = count[i] > 0 ? Math.sqrt(r0[i] * r0[i] + count[i] * AREA / Math.PI) + 1.2 : repR[i] + 1;
     const ch = children[i];
@@ -101,7 +164,7 @@ function layout() {
     ch.forEach((c, n) => {
       const th = 2 * Math.asin(Math.min(1, Rs[n] / d)) * k, ac = a + th / 2;
       const ca = Math.cos(ac), sa = Math.sin(ac);
-      const ex = d * ca, ey = d * sa;              // child's enclosing circle center
+      const ex = d * ca, ey = d * sa;
       lx[c] = ex - (ca * ox[c] - sa * oy[c]);
       ly[c] = ey - (sa * ox[c] + ca * oy[c]);
       lang[c] = ac;
@@ -144,15 +207,9 @@ function layout() {
   }
 }
 
-function folderPath(i) {
-  const parts = [];
-  for (; i > 0; i = parent[i]) parts.push(T.folders[i][1]);
-  return parts.reverse().join(' › ') || T.rootName;
-}
-
 /* ---------------------------------------------------------------- images */
 
-const cache = new Map();   // key -> {st: 0 loading | 1 ok | 2 err, img, t, lvl}
+const cache = new Map();
 const levelCount = [0, 0, 0];
 let inflight = 0, frame = 0;
 
@@ -166,7 +223,6 @@ function desiredLevel(sizePx) {
   return 2;
 }
 
-/** Best available image for photo `id` (<= lvl); queues the wanted level. */
 function getImg(id, lvl, pri, wanted) {
   let best = null;
   for (let l = lvl; l >= 0; l--) {
@@ -232,10 +288,26 @@ function requestRender() {
   requestAnimationFrame(() => { renderQueued = false; render(); });
 }
 
+function getBarHeight() {
+  const b = $('#bar');
+  return b ? b.offsetHeight : 80;
+}
+
 function resize() {
+  const oldW = W;
+  const oldCy = oldW > 0 ? usableCenterY() : 0;
+  const oldMinDim = oldW > 0 ? usableMinDim() : 0;
   DPR = window.devicePixelRatio || 1;
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  if (oldW > 0 && T && subR && subR[0] > 0) {
+    const wx = (oldW / 2 - cam.tx) / cam.s;
+    const wy = (oldCy - cam.ty) / cam.s;
+    const newMinDim = usableMinDim();
+    minScale = newMinDim / (2 * subR[0]) * 0.4;
+    const ratio = newMinDim / Math.max(1, oldMinDim);
+    setCamera(wx, wy, Math.max(minScale, Math.min(400, cam.s * ratio)));
+  }
   requestRender();
 }
 
@@ -250,7 +322,7 @@ function render() {
   ctx.imageSmoothingQuality = 'medium';
   const { s, tx, ty } = cam;
   const wanted = [];
-  const cx = W / 2, cy = H / 2;
+  const cx = W / 2, cy = (H - getBarHeight()) / 2;
   const inView = (x, y, r) => x + r > 0 && x - r < W && y + r > 0 && y - r < H;
 
   // edges
@@ -293,7 +365,7 @@ function render() {
     const x = fx[i] * s + tx, y = fy[i] * s + ty;
     if (!inView(x, y, coreR[i] * s)) continue;
     const col = COLORS[(depth[i] + 1) % COLORS.length];
-    if (pr < 0.6) {                       // too small: draw the photo ring as a soft halo
+    if (pr < 0.6) {
       ctx.globalAlpha = 0.28;
       ctx.fillStyle = col;
       ctx.beginPath();
@@ -360,7 +432,7 @@ function render() {
   ctx.lineJoin = 'round';
   for (const [i, x, y, rr] of labels) {
     const fs = Math.max(9.5, Math.min(18, rr * 0.45));
-    let name = T.folders[i][1];
+    let name = folderDisplayName(i);
     if (name.length > 22) name = name.slice(0, 21) + '…';
     const ly = y + rr + fs + 3;
     ctx.font = `600 ${fs}px "Segoe UI","Malgun Gothic",sans-serif`;
@@ -383,14 +455,29 @@ function render() {
 
 let anim = null;
 
+function usableCenterY() {
+  const topPad = 28;
+  const botPad = getBarHeight();
+  return topPad + Math.max(100, H - topPad - botPad) / 2;
+}
+
+function usableMinDim() {
+  const topPad = 28;
+  const botPad = getBarHeight();
+  return Math.min(W, Math.max(200, H - topPad - botPad));
+}
+
 function setCamera(wcx, wcy, s) {
-  cam.s = s; cam.tx = W / 2 - wcx * s; cam.ty = H / 2 - wcy * s;
+  cam.s = s;
+  cam.tx = W / 2 - wcx * s;
+  cam.ty = usableCenterY() - wcy * s;
 }
 
 function flyTo(wx, wy, radius, animate = true) {
-  const s1 = Math.max(minScale, Math.min(400, Math.min(W, H) / (2 * radius * 1.08)));
+  const s1 = Math.max(minScale, Math.min(400, usableMinDim() / (2 * radius * 1.08)));
   if (!animate) { setCamera(wx, wy, s1); requestRender(); return; }
-  const s0 = cam.s, c0x = (W / 2 - cam.tx) / s0, c0y = (H / 2 - cam.ty) / s0;
+  const cy = usableCenterY();
+  const s0 = cam.s, c0x = (W / 2 - cam.tx) / s0, c0y = (cy - cam.ty) / s0;
   const t0 = performance.now(), dur = 750;
   anim = (now) => {
     let u = Math.min(1, (now - t0) / dur);
@@ -407,7 +494,7 @@ requestAnimationFrame(stepAnim);
 
 function fitAll(animate = true) {
   if (!T) return;
-  minScale = Math.min(W, H) / (2 * subR[0]) * 0.4;
+  minScale = usableMinDim() / (2 * subR[0]) * 0.4;
   flyTo(encX[0], encY[0], subR[0], animate);
 }
 
@@ -438,7 +525,7 @@ function hitTest(x, y) {
     const dx = wx - fx[i], dy = wy - fy[i], d2 = dx * dx + dy * dy;
     if (d2 > coreR[i] * coreR[i]) continue;
     if (P * cam.s >= 2) {
-      let best = -1, bd = (P * 1.25) ** 2;
+      let best = -1, bd = (P * 1.35) ** 2;
       for (let id = start[i], e = id + count[i]; id < e; id++) {
         const ex = wx - px[id], ey = wy - py[id], dd = ex * ex + ey * ey;
         if (dd < bd) { bd = dd; best = id; }
@@ -453,8 +540,16 @@ function hitTest(x, y) {
 /* ------------------------------------------------------------ interaction */
 
 let drag = null, pinch = null, hoverFolder = -1, lastTap = { t: 0, x: 0, y: 0 };
+let longPressTimer = null, longPressTriggered = false;
 const pointers = new Map();
 const tip = $('#tip');
+
+function clearLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
 
 function syncGestureState() {
   const pts = [...pointers.values()];
@@ -462,6 +557,7 @@ function syncGestureState() {
     pinch = null;
     drag = { x: pts[0].x, y: pts[0].y, tx: cam.tx, ty: cam.ty, moved: drag ? drag.moved : false };
   } else if (pts.length >= 2) {
+    clearLongPress();
     const [a, b] = pts;
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     const dist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y));
@@ -469,23 +565,50 @@ function syncGestureState() {
     if (drag) drag.moved = true;
     tip.hidden = true;
   } else {
+    clearLongPress();
     drag = null;
     pinch = null;
   }
 }
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.pointerType === 'touch') $('#help').textContent = '두 손가락: 확대/축소 · 한 손가락 드래그: 이동 · 탭: 폴더/사진 열기 · 더블탭: 확대';
+  if (e.button && e.button !== 0) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
   anim = null;
-  try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+  longPressTriggered = false;
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   syncGestureState();
+
+  if (pointers.size === 1) {
+    const startX = e.clientX, startY = e.clientY;
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (pointers.size === 1 && drag && !drag.moved) {
+        const h = hitTest(startX, startY);
+        if (h) {
+          longPressTriggered = true;
+          drag.moved = true;
+          try { if (navigator.vibrate) navigator.vibrate(35); } catch (_) {}
+          openContextMenu(h);
+        }
+      }
+    }, 480);
+  }
+});
+
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  clearLongPress();
+  const h = hitTest(e.clientX, e.clientY);
+  if (h) openContextMenu(h);
 });
 
 canvas.addEventListener('pointermove', (e) => {
   if (pointers.has(e.pointerId)) {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
     if (pointers.size >= 2 && pinch) {
+      clearLongPress();
       const [a, b] = [...pointers.values()];
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       const d = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y));
@@ -498,13 +621,14 @@ canvas.addEventListener('pointermove', (e) => {
     }
     if (drag) {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      const thresh = e.pointerType === 'touch' ? 8 : 4;
+      const thresh = e.pointerType === 'touch' ? 9 : 4;
       if (!drag.moved && Math.hypot(dx, dy) > thresh) {
         drag.moved = true;
+        clearLongPress();
         canvas.classList.add('dragging');
         tip.hidden = true;
       }
-      if (drag.moved) {
+      if (drag.moved && !longPressTriggered) {
         cam.tx = drag.tx + dx;
         cam.ty = drag.ty + dy;
         requestRender();
@@ -516,7 +640,8 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 function onPointerEnd(e) {
-  const wasSingleTap = pointers.size === 1 && drag && !drag.moved;
+  clearLongPress();
+  const wasSingleTap = pointers.size === 1 && drag && !drag.moved && !longPressTriggered;
   pointers.delete(e.pointerId);
   canvas.classList.remove('dragging');
   if (wasSingleTap) {
@@ -558,8 +683,9 @@ function hover(x, y) {
     setHover(-1);
   } else {
     const i = h.i;
-    html = `<b>${esc(T.folders[i][1])}</b><br><span>${esc(folderPath(i))}</span><br>` +
-      `<span>사진 ${total[i].toLocaleString()}장` + (count[i] !== total[i] ? ` (이 폴더 ${count[i].toLocaleString()}장)` : '') + `</span>`;
+    html = `<b>${esc(folderDisplayName(i))}</b><br><span>${esc(folderPath(i))}</span><br>` +
+      `<span>사진 ${total[i].toLocaleString()}장` + (count[i] !== total[i] ? ` (이 폴더 ${count[i].toLocaleString()}장)` : '') +
+      ` · 길게 눌러 옵션</span>`;
     setHover(i);
   }
   tip.innerHTML = html;
@@ -575,12 +701,161 @@ function click(x, y) {
   if (h.type === 'photo') return openViewer(h.id);
   const i = h.i;
   const r = count[i] > 0 ? coreR[i] : subR[i];
-  const fill = r * cam.s * 2 / Math.min(W, H);
+  const fill = r * cam.s * 2 / usableMinDim();
   if (h.type === 'folder' && fill > 0.75 && rep[i] >= 0) return openViewer(rep[i]);
   flyTo(count[i] > 0 ? fx[i] : encX[i], count[i] > 0 ? fy[i] : encY[i], r);
 }
 
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ------------------------- Long-press Context Menu & Rep Photo Picker */
+
+const ctxOverlay = $('#ctxOverlay');
+const repOverlay = $('#repOverlay');
+let ctxTarget = null;
+
+function setFolderRepPhoto(folderIdx, photoId) {
+  if (folderIdx < 0 || folderIdx >= N || photoId < 0 || photoId >= NP) return;
+  customReps[folderKey(folderIdx)] = T.photos[photoId];
+  rep[folderIdx] = photoId;
+  saveCustomizations();
+  requestRender();
+  showToast(`'${folderDisplayName(folderIdx)}' 대표 사진이 변경되었습니다`);
+}
+
+function openContextMenu(h) {
+  ctxTarget = h;
+  $('#ctxRenameBox').hidden = true;
+  const actions = $('#ctxActions');
+  actions.innerHTML = '';
+
+  if (h.type === 'photo') {
+    const id = h.id;
+    const fIdx = pf[id];
+    $('#ctxTitle').textContent = T.photos[id];
+    $('#ctxSub').textContent = `${folderPath(fIdx)} · (${id - start[fIdx] + 1}/${count[fIdx]})`;
+
+    addCtxBtn('⭐ 이 폴더의 대표 사진으로 지정', () => {
+      closeContextMenu();
+      setFolderRepPhoto(fIdx, id);
+    });
+    addCtxBtn('🔍 사진 크게 보기', () => {
+      closeContextMenu();
+      openViewer(id);
+    });
+    addCtxBtn('📂 원본 파일 열기', () => {
+      closeContextMenu();
+      fetch(`/api/open-file?id=${id}`);
+    });
+  } else {
+    const i = h.i;
+    $('#ctxTitle').textContent = folderDisplayName(i);
+    $('#ctxSub').textContent = `${folderPath(i)} · 사진 ${total[i].toLocaleString()}장`;
+
+    addCtxBtn('🖼️ 대표 사진 변경 (목록에서 고르기)', () => {
+      closeContextMenu();
+      openRepPicker(i);
+    });
+    addCtxBtn('✏️ 표시 이름 변경', () => {
+      const box = $('#ctxRenameBox');
+      box.hidden = !box.hidden;
+      if (!box.hidden) {
+        const inp = $('#ctxRenameInput');
+        inp.value = folderDisplayName(i);
+        setTimeout(() => inp.focus(), 50);
+      }
+    });
+    addCtxBtn('🔍 이 폴더로 확대 이동', () => {
+      closeContextMenu();
+      const r = count[i] > 0 ? coreR[i] : subR[i];
+      flyTo(count[i] > 0 ? fx[i] : encX[i], count[i] > 0 ? fy[i] : encY[i], r);
+    });
+    if (rep[i] >= 0) {
+      addCtxBtn('📷 현재 대표 사진 크게 보기', () => {
+        closeContextMenu();
+        openViewer(rep[i]);
+      });
+    }
+    if (customReps[folderKey(i)] || customNames[folderKey(i)]) {
+      addCtxBtn('🔄 기본 대표사진·이름으로 초기화', () => {
+        delete customReps[folderKey(i)];
+        delete customNames[folderKey(i)];
+        saveCustomizations();
+        applyCustomReps();
+        closeContextMenu();
+        requestRender();
+        showToast('기본 설정으로 초기화되었습니다');
+      });
+    }
+  }
+  ctxOverlay.hidden = false;
+}
+
+function addCtxBtn(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.onclick = onClick;
+  $('#ctxActions').appendChild(b);
+}
+
+function closeContextMenu() {
+  ctxOverlay.hidden = true;
+  ctxTarget = null;
+}
+
+$('#ctxCancel').onclick = closeContextMenu;
+ctxOverlay.addEventListener('click', (e) => { if (e.target === ctxOverlay) closeContextMenu(); });
+
+$('#ctxRenameSave').onclick = () => {
+  if (!ctxTarget || ctxTarget.type === 'photo') return;
+  const i = ctxTarget.i;
+  const val = $('#ctxRenameInput').value.trim();
+  if (val) {
+    customNames[folderKey(i)] = val;
+    saveCustomizations();
+    requestRender();
+    showToast(`표시 이름이 '${val}'(으)로 변경되었습니다`);
+  }
+  closeContextMenu();
+};
+$('#ctxRenameInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('#ctxRenameSave').click();
+});
+
+function openRepPicker(folderIdx) {
+  const pStart = start[folderIdx];
+  const lastFolder = subEnd[folderIdx];
+  const pEnd = start[lastFolder] + count[lastFolder];
+  const totalInSub = pEnd - pStart;
+  $('#repTitle').textContent = `'${folderDisplayName(folderIdx)}' 대표 사진 선택`;
+  $('#repSub').textContent = `사진을 탭하면 대표 원 이미지로 지정됩니다 (총 ${totalInSub.toLocaleString()}장)`;
+
+  const grid = $('#repGrid');
+  grid.innerHTML = '';
+  const maxShow = 120;
+  const step = Math.max(1, Math.floor(totalInSub / maxShow));
+  const v = T.version || 0;
+
+  for (let id = pStart, shown = 0; id < pEnd && shown < maxShow; id += step, shown++) {
+    const item = document.createElement('div');
+    item.className = 'rep-item' + (id === rep[folderIdx] ? ' current' : '');
+    const im = document.createElement('img');
+    im.loading = 'lazy';
+    im.src = `/api/thumb?id=${id}&v=${v}`;
+    im.alt = T.photos[id];
+    item.appendChild(im);
+    item.onclick = () => {
+      repOverlay.hidden = true;
+      setFolderRepPhoto(folderIdx, id);
+    };
+    grid.appendChild(item);
+  }
+  repOverlay.hidden = false;
+}
+
+$('#repClose').onclick = () => { repOverlay.hidden = true; };
+repOverlay.addEventListener('click', (e) => { if (e.target === repOverlay) repOverlay.hidden = true; });
 
 /* ---------------------------------------------------------------- viewer */
 
@@ -603,16 +878,15 @@ function openViewer(id) {
   hi.src = bigUrl(id);
   const i = pf[id];
   $('#vinfo').innerHTML = `<b>${esc(T.photos[id])}</b> &nbsp; ${esc(folderPath(i))} &nbsp; (${id - start[i] + 1} / ${count[i]})`;
-  $('#vorig').href = `/api/orig?id=${id}&v=${v}`;
   preload.length = 0;
   for (const n of [id + 1, id - 1]) if (n >= 0 && n < NP) { const im = new Image(); im.src = bigUrl(n); preload.push(im); }
 }
 
 function closeViewer() {
   viewer.hidden = true;
-  if (vid >= 0) {   // keep the map in sync with the photo you ended on
+  if (vid >= 0) {
     const sx = px[vid] * cam.s + cam.tx, sy = py[vid] * cam.s + cam.ty;
-    if (sx < 0 || sx > W || sy < 0 || sy > H) flyTo(px[vid], py[vid], Math.min(W, H) / (2 * cam.s * 1.08));
+    if (sx < 0 || sx > W || sy < 0 || sy > H) flyTo(px[vid], py[vid], usableMinDim() / (2 * cam.s * 1.08));
   }
   vid = -1;
 }
@@ -620,16 +894,22 @@ function closeViewer() {
 $('#vprev').onclick = (e) => { e.stopPropagation(); openViewer(vid - 1); };
 $('#vnext').onclick = (e) => { e.stopPropagation(); openViewer(vid + 1); };
 $('#vclose').onclick = (e) => { e.stopPropagation(); closeViewer(); };
+$('#vcloseTop').onclick = (e) => { e.stopPropagation(); closeViewer(); };
 $('#vorig').onclick = (e) => {
   e.preventDefault();
   e.stopPropagation();
   if (vid >= 0) fetch(`/api/open-file?id=${vid}`);
+};
+$('#vsetRep').onclick = (e) => {
+  e.stopPropagation();
+  if (vid >= 0) setFolderRepPhoto(pf[vid], vid);
 };
 viewer.addEventListener('click', (e) => { if (e.target === viewer) closeViewer(); });
 viewer.addEventListener('wheel', (e) => { e.preventDefault(); openViewer(vid + (e.deltaY > 0 ? 1 : -1)); }, { passive: false });
 
 let vTouch = null;
 viewer.addEventListener('touchstart', (e) => {
+  if (e.target.closest('button')) return;
   if (e.touches.length === 1) {
     vTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now() };
   } else {
@@ -649,6 +929,14 @@ viewer.addEventListener('touchend', (e) => {
 }, { passive: true });
 
 window.addEventListener('keydown', (e) => {
+  if (!repOverlay.hidden) {
+    if (e.key === 'Escape') repOverlay.hidden = true;
+    return;
+  }
+  if (!ctxOverlay.hidden) {
+    if (e.key === 'Escape') closeContextMenu();
+    return;
+  }
   if (!viewer.hidden) {
     if (e.key === 'ArrowRight' || e.key === ' ') openViewer(vid + 1);
     else if (e.key === 'ArrowLeft') openViewer(vid - 1);
@@ -657,10 +945,10 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
-  if (document.activeElement === $('#search')) return;
+  if (document.activeElement === $('#search') || document.activeElement === $('#ctxRenameInput')) return;
   if (e.key === 'Home' || e.key === '0') fitAll();
-  else if (e.key === '+' || e.key === '=') zoomAt(W / 2, H / 2, 1.5);
-  else if (e.key === '-') zoomAt(W / 2, H / 2, 1 / 1.5);
+  else if (e.key === '+' || e.key === '=') zoomAt(W / 2, usableCenterY(), 1.5);
+  else if (e.key === '-') zoomAt(W / 2, usableCenterY(), 1 / 1.5);
 });
 
 /* ---------------------------------------------------------------- search */
@@ -670,7 +958,7 @@ let hits = [], sel = 0;
 
 function renderResults() {
   results.innerHTML = hits.map((i, k) =>
-    `<li data-i="${i}" class="${k === sel ? 'sel' : ''}">${esc(T.folders[i][1])} <span style="color:#8a8aa5">· ${total[i].toLocaleString()}장</span>` +
+    `<li data-i="${i}" class="${k === sel ? 'sel' : ''}">${esc(folderDisplayName(i))} <span style="color:#8a8aa5">· ${total[i].toLocaleString()}장</span>` +
     `<span class="p">${esc(folderPath(i))}</span></li>`).join('');
   results.hidden = !hits.length;
 }
@@ -680,7 +968,9 @@ search.addEventListener('input', () => {
   hits = [];
   sel = 0;
   if (q && T) {
-    for (let i = 0; i < N && hits.length < 40; i++) if (T.folders[i][1].toLowerCase().includes(q)) hits.push(i);
+    for (let i = 0; i < N && hits.length < 40; i++) {
+      if (folderDisplayName(i).toLowerCase().includes(q) || T.folders[i][1].toLowerCase().includes(q)) hits.push(i);
+    }
   }
   renderResults();
 });
@@ -778,7 +1068,10 @@ $('#btnRescan').onclick = async () => {
 };
 
 window.__handleAndroidBack = () => {
+  if (!repOverlay.hidden) { repOverlay.hidden = true; return true; }
+  if (!ctxOverlay.hidden) { closeContextMenu(); return true; }
   if (!viewer.hidden) { closeViewer(); return true; }
+  if (!$('#thumbPop').hidden) { $('#thumbPop').hidden = true; return true; }
   if (!results.hidden) { results.hidden = true; search.blur(); return true; }
   return false;
 };

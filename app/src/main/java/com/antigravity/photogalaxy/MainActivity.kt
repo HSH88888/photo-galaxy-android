@@ -18,6 +18,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.ByteArrayInputStream
 import java.text.NumberFormat
 import java.util.Locale
@@ -48,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
 
         val prefs = getSharedPreferences("photo_galaxy", MODE_PRIVATE)
         currentPrefix = prefs.getString("root_prefix", "") ?: ""
@@ -76,6 +80,13 @@ class MainActivity : AppCompatActivity() {
                     return handleLocalRequest(url)
                 }
             }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+            val sys = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(sys.left, sys.top, sys.right, sys.bottom)
+            WindowInsetsCompat.CONSUMED
         }
         setContentView(webView)
 
