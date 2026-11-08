@@ -1,0 +1,13 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+*.keystore
+*.jks
+
+# Keep the installable APK in the root of the repo for easy phone download
+!PhotoGalaxy.apk
+
+.kotlin/

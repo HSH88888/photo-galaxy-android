@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Photo Galaxy</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<header id="bar">
+  <div class="brand">📷 Photo Galaxy</div>
+  <div id="stats">불러오는 중...</div>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="폴더 검색 (예: 제주, 2016)" autocomplete="off">
+    <ul id="results" hidden></ul>
+  </div>
+  <div class="mode-group" id="modeGroup" title="분류 기준 선택">
+    <button type="button" class="mode-btn active" data-mode="folder">폴더별</button>
+    <button type="button" class="mode-btn" data-mode="month">연·월별</button>
+    <button type="button" class="mode-btn" data-mode="day">일별</button>
+  </div>
+  <div class="thumb-wrap">
+    <button type="button" id="btnThumbCfg" title="썸네일 표시 기준 장수 설정">🖼️ <span id="thumbVal">130</span>장</button>
+    <div id="thumbPop" hidden>
+      <div class="tp-title">화면에 보이는 사진이 <b><span id="tpCur">130</span>장 이하</b>일 때 썸네일 로드</div>
+      <div class="tp-row">
+        <button type="button" id="tpMinus">−</button>
+        <input id="tpRange" type="range" min="20" max="500" step="10" value="130">
+        <button type="button" id="tpPlus">+</button>
+      </div>
+      <div class="tp-presets">
+        <button type="button" data-v="60">60장(빠름)</button>
+        <button type="button" data-v="130">130장(기본)</button>
+        <button type="button" data-v="250">250장</button>
+        <button type="button" data-v="400">400장</button>
+      </div>
+    </div>
+  </div>
+  <button id="btnFolder" title="다른 사진 폴더 열기">📁 폴더</button>
+  <button id="btnFit" title="전체 보기 (Home)">전체</button>
+  <button id="btnRescan" title="폴더를 다시 스캔">새로고침</button>
+</header>
+
+<div id="tip" hidden></div>
+<div id="help">휠: 확대/축소 · 드래그: 이동 · 폴더 클릭: 그 폴더로 이동 · 사진 클릭: 크게 보기 · Home: 전체 보기</div>
+
+<div id="viewer" hidden>
+  <img id="vimg" alt="">
+  <div id="vinfo"></div>
+  <button id="vprev" class="vnav" title="이전 (←)">‹</button>
+  <button id="vnext" class="vnav" title="다음 (→)">›</button>
+  <div id="vtools">
+    <a id="vorig" target="_blank" title="원본 파일 열기">원본</a>
+    <button id="vclose" title="닫기 (Esc)">✕</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
