@@ -37,7 +37,8 @@ const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const LEVEL_SIZE = [160, 512, 1600];      // thumb / medium / large (px, square crop)
 const LEVEL_CAP = [3000, 160, 16];        // max cached images per level
 const MAX_INFLIGHT = 8;
-let thumbMaxVisible = Math.max(10, Math.min(1000, +(localStorage.getItem('thumbMaxVisible') || 130)));
+const _savedThumbMax = +(localStorage.getItem('thumbMaxVisible') || 100);
+let thumbMaxVisible = Math.max(1, Math.min(5000, _savedThumbMax === 130 ? 100 : _savedThumbMax));
 
 let W = 0, H = 0, DPR = 1;
 let T = null;            // tree json
@@ -59,7 +60,29 @@ function saveCustomizations() {
     localStorage.setItem('pg_custom_reps', JSON.stringify(customReps));
     localStorage.setItem('pg_custom_names', JSON.stringify(customNames));
   } catch (_) {}
+  fetch('/api/prefs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customReps, customNames, thumbMaxVisible })
+  }).catch(() => {});
 }
+
+async function syncPrefsFromServer() {
+  try {
+    const r = await fetch('/api/prefs', { cache: 'no-store' });
+    if (!r.ok) return;
+    const p = await r.json();
+    if (p && typeof p === 'object') {
+      if (p.customReps && typeof p.customReps === 'object') customReps = { ...p.customReps, ...customReps };
+      if (p.customNames && typeof p.customNames === 'object') customNames = { ...p.customNames, ...customNames };
+      if (typeof p.thumbMaxVisible === 'number' && !localStorage.getItem('thumbMaxVisible')) {
+        setThumbMax(p.thumbMaxVisible);
+      }
+      if (T) { applyCustomReps(); requestRender(); }
+    }
+  } catch (_) {}
+}
+syncPrefsFromServer();
 
 let toastTimer = null;
 function showToast(msg) {
@@ -1052,11 +1075,18 @@ $('#modeGroup').addEventListener('click', async (e) => {
 });
 
 function setThumbMax(val) {
-  thumbMaxVisible = Math.max(10, Math.min(1000, Math.round(val / 10) * 10));
+  const n = parseInt(val, 10);
+  if (isNaN(n)) return;
+  thumbMaxVisible = Math.max(1, Math.min(5000, n));
   try { localStorage.setItem('thumbMaxVisible', String(thumbMaxVisible)); } catch (_) {}
   $('#thumbVal').textContent = thumbMaxVisible;
   $('#tpCur').textContent = thumbMaxVisible;
-  $('#tpRange').value = thumbMaxVisible;
+  $('#tpRange').value = Math.max(50, Math.min(1000, thumbMaxVisible));
+  const inp = $('#tpInput');
+  if (inp && document.activeElement !== inp) inp.value = thumbMaxVisible;
+  document.querySelectorAll('.tp-presets button').forEach((b) => {
+    b.classList.toggle('active', +b.dataset.v === thumbMaxVisible);
+  });
   requestRender();
 }
 setThumbMax(thumbMaxVisible);
@@ -1064,13 +1094,36 @@ setThumbMax(thumbMaxVisible);
 $('#btnThumbCfg').onclick = (e) => {
   e.stopPropagation();
   $('#thumbPop').hidden = !$('#thumbPop').hidden;
+  if (!$('#thumbPop').hidden && $('#tpInput')) $('#tpInput').value = thumbMaxVisible;
 };
 $('#thumbPop').onclick = (e) => e.stopPropagation();
 $('#tpRange').oninput = (e) => setThumbMax(+e.target.value);
-$('#tpMinus').onclick = () => setThumbMax(thumbMaxVisible - 10);
-$('#tpPlus').onclick = () => setThumbMax(thumbMaxVisible + 10);
+if ($('#tpInput')) {
+  $('#tpInput').oninput = (e) => {
+    const v = parseInt(e.target.value, 10);
+    if (!isNaN(v) && v >= 1) setThumbMax(v);
+  };
+  $('#tpInput').onchange = (e) => {
+    setThumbMax(+e.target.value || 100);
+    $('#tpInput').value = thumbMaxVisible;
+  };
+}
+$('#tpMinus').onclick = () => {
+  const next = Math.max(10, Math.floor((thumbMaxVisible - 1) / 100) * 100 || 10);
+  setThumbMax(next);
+  if ($('#tpInput')) $('#tpInput').value = thumbMaxVisible;
+};
+$('#tpPlus').onclick = () => {
+  const next = Math.min(5000, (Math.floor(thumbMaxVisible / 100) + 1) * 100);
+  setThumbMax(next);
+  if ($('#tpInput')) $('#tpInput').value = thumbMaxVisible;
+};
 document.querySelectorAll('.tp-presets button').forEach((b) => {
-  b.onclick = () => { setThumbMax(+b.dataset.v); $('#thumbPop').hidden = true; };
+  b.onclick = () => {
+    setThumbMax(+b.dataset.v);
+    if ($('#tpInput')) $('#tpInput').value = thumbMaxVisible;
+    $('#thumbPop').hidden = true;
+  };
 });
 window.addEventListener('pointerdown', (e) => {
   if (!$('#thumbPop').hidden && !e.target.closest('.thumb-wrap')) $('#thumbPop').hidden = true;
